@@ -1,0 +1,280 @@
+### This is a customized dashboard providing insights in the task status of Qlik Sense jobs for last 1 month and daily.
+
+The overview of sheets have been added in the word document in Code section. Here below is the breakdown of the script from data load editor sections.
+
+**Binary Load** : I have done a Binary reload from the Qlik Reloads monitor dashboard from monitoring streams, here i have kept only required tables and fields and dropped the remaining data.
+
+-------------------------------------------------------------------------------------------------------------
+Binary 'lib://ServiceCluster_Apps/cad9194c-acdb-4663-98c3-944a9c3b16c9'; 
+
+Drop Fields Id,log_sequence from  [LogContent];
+Drop Fields Weekday,Hour,[Week Beginning],hour_sort,[Minute of Hour],[Hour Timeline],[Ten-Minute Timeline],[One-Minute Timeline],last24hours from date_time;
+
+Drop Tables UDC,Task,TaskTrigger,Hour_Table,Last,node_list,Intermediate_States,Weekdays,[Reload Color Sort],TaskTree;
+
+FOR vCount = 0 to NoOfTables()-1
+
+     LET vTableName = TableName($(vCount));
+
+     STORE $(vTableName) INTO 'lib://APP_QlikSense_User_Extract/Task Monitoring New/Task Monitoring Prod/$(vTableName).qvd'(qvd);
+
+NEXT vCount
+
+Drop Tables date_time,LogContent,task_name_type,TaskHierarchy,Reload_Status_Duration,maxTaskDepth;
+
+----------------------------------------------------------------------------------------------------------------------------------------------
+
+**Main** : Here along with default variables, i have defined few date variables which are used in the later part of the script and charts.
+
+-------------------------------------
+
+SET ThousandSep=',';
+SET DecimalSep='.';
+SET MoneyThousandSep=',';
+SET MoneyDecimalSep='.';
+SET MoneyFormat='$#,##0.00;-$#,##0.00';
+SET TimeFormat='h:mm:ss TT';
+SET DateFormat='YYYY-MM-DD';
+SET TimestampFormat='M/D/YYYY h:mm:ss[.fff] TT';
+SET FirstWeekDay=6;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='en-US';
+SET CreateSearchIndexOnReload=1;
+SET MonthNames='Jan;Feb;Mar;Apr;May;Jun;Jul;Aug;Sep;Oct;Nov;Dec';
+SET LongMonthNames='January;February;March;April;May;June;July;August;September;October;November;December';
+SET DayNames='Mon;Tue;Wed;Thu;Fri;Sat;Sun';
+SET LongDayNames='Monday;Tuesday;Wednesday;Thursday;Friday;Saturday;Sunday';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+
+LET TimeNow = Time(TimeStamp(Now()));  
+Let vToday = Date(Today(),'YYYY-MM-DD');
+Trace 'Time Now : $(TimeNow)';
+Trace 'Todays Date : $(vToday)';
+
+----------------------------------------------------------------
+
+**Stream App Mapping** :  Here, i am fetching the current data from the QRS REST API and creating a Stream and App mapping and storing the result into a QVD
+
+------------------------------------------------------------------------
+
+LIB CONNECT TO 'monitor_apps_REST_task';
+
+RestConnectorMasterTable:
+SQL SELECT 
+	"id" AS "id_u4",
+	"createdDate",
+	"modifiedDate",
+	"modifiedByUserName",
+	"path",
+	"parameters",
+	"qlikUser",
+	"name" AS "name_u1",
+	"taskType",
+	"enabled",
+	"taskSessionTimeout",
+	"maxRetries",
+	"privileges" AS "privileges_u4",
+	"schemaPath",
+	"isManuallyTriggered",
+	"__KEY_root",
+	(SELECT 
+		"@Value",
+		"__FK_customProperties"
+	FROM "customProperties" FK "__FK_customProperties" ArrayValueAlias "@Value"),
+	(SELECT 
+		"id" AS "id_u1",
+		"nextExecution",
+		"privileges" AS "privileges_u1",
+		"__KEY_operational",
+		"__FK_operational",
+		(SELECT 
+			"id" AS "id_u0",
+			"executingNodeName",
+			"status",
+			"startTime",
+			"stopTime",
+			"duration",
+			"fileReferenceID",
+			"scriptLogAvailable",
+			"scriptLogLocation",
+			"scriptLogSize",
+			"privileges" AS "privileges_u0",
+			"__KEY_lastExecutionResult",
+			"__FK_lastExecutionResult",
+			(SELECT 
+				"id",
+				"detailsType",
+				"message",
+				"detailCreatedDate",
+				"privileges",
+				"__FK_details"
+			FROM "details" FK "__FK_details")
+		FROM "lastExecutionResult" PK "__KEY_lastExecutionResult" FK "__FK_lastExecutionResult")
+	FROM "operational" PK "__KEY_operational" FK "__FK_operational"),
+	(SELECT 
+		"@Value" AS "@Value_u0",
+		"__FK_tags"
+	FROM "tags" FK "__FK_tags" ArrayValueAlias "@Value_u0"),
+	(SELECT 
+		"id" AS "id_u3",
+		"name" AS "name_u0",
+		"appId",
+		"publishTime",
+		"published",
+		"savedInProductVersion",
+		"migrationHash",
+		"availabilityStatus",
+		"privileges" AS "privileges_u3",
+		"stream",
+		"__KEY_app",
+		"__FK_app",
+		(SELECT 
+			"id" AS "id_u2",
+			"name",
+			"privileges" AS "privileges_u2",
+			"__FK_stream"
+		FROM "stream" FK "__FK_stream")
+	FROM "app" PK "__KEY_app" FK "__FK_app")
+FROM JSON (wrap on) "root" PK "__KEY_root";
+
+[Stream-App Mapping Temp]:
+LOAD	[id_u2],
+	[name]                as Stream,
+    UPPER([name])         AS STREAM,
+	[__FK_stream] AS [__KEY_app]
+RESIDENT RestConnectorMasterTable
+WHERE NOT IsNull([__FK_stream]) and Wildmatch([name],'*M-SMART*','*M-Smart*','*Field Insights*',
+'*Iconnect Technical*','*OmniA*','*Global Executive Mashup*','*MCM*','*Veritas*','*FINANCIAL Hana-Tech*'
+,'*LATAM PSP Analytics*','*M-SMART LATAM MSL*','*Multi Country Rollout - Latam*','*Inland Sales*','*FFE*','*IMS*');
+
+
+LEFT JOIN
+
+[App]:
+LOAD	[id_u3],
+	[name_u0] as [App Name],
+	[appId],
+	[__KEY_app],
+    [published],
+	[__FK_app] AS [__KEY_root]
+RESIDENT RestConnectorMasterTable
+WHERE NOT IsNull([__FK_app]) AND [published]<>'False';
+
+NoConcatenate
+
+[Stream-App Mapping]:
+LOAD 
+*
+
+RESIDENT [Stream-App Mapping Temp]
+WHERE NOT ISNULL(Stream);
+
+
+STORE [Stream-App Mapping] INTO 'lib://APP_QlikSense_User_Extract/Task Monitoring New/Task Monitoring Prod/Stream-App Mapping.qvd'(qvd);
+
+DROP TABLE [Stream-App Mapping];
+DROP TABLE [Stream-App Mapping Temp];
+DROP TABLE RestConnectorMasterTable;
+
+
+------------------------------------------------------------------------
+
+**Load All QVD** : Here i am loading all the QVD's which were created from Binary load and doing some transoformation.
+
+------------------------------------------------------------------------
+
+[Stream-App Mapping]:
+LOAD
+   
+     Stream                            AS [Stream Name],
+     STREAM                            AS STREAM,
+    "App Name"                         AS [App Name]
+    
+FROM [lib://APP_QlikSense_User_Extract/Task Monitoring New/Task Monitoring Prod/Stream-App Mapping.qvd]
+(qvd);
+
+LEFT JOIN
+
+[Task Details] :
+LOAD
+   // _date_time_link,
+    ExecutionId,
+    TaskId,
+    TaskExecution,
+    "App Name"                               AS [App Name],
+    Hostname,
+    Message,
+    "Reload from Hub",
+    Time(Frac([LogEntryPeriodStart]))        As [Start Time],
+    floor(Date(LogEntryPeriodStart,'YYYY-MM-DD'))   As [Date],
+    Month(LogEntryPeriodStart)               As [Month],
+    Year(LogEntryPeriodStart)                As [Year],
+    Time(Frac([LogTimeStamp]))               As [Stop Time]
+FROM [lib://APP_QlikSense_User_Extract/Task Monitoring New/Task Monitoring Prod/LogContent.qvd]
+(qvd)
+Where [Reload from Hub]<>1 AND (Time(Frac([LogEntryPeriodStart]))<>Time(Frac([LogTimeStamp])) )
+AND Year(LogEntryPeriodStart)>2021 AND  Date(LogEntryPeriodStart,'YYYY-MM-DD')>=Today()-30 and Not isnull(Date(LogEntryPeriodStart,'YYYY-MM-DD'));
+
+
+
+[Task Type]:
+LOAD
+    TaskId,
+    "Task Name",
+    "Task Name Historical",
+    "Task Type"
+FROM [lib://APP_QlikSense_User_Extract/Task Monitoring New/Task Monitoring Prod/task_name_type.qvd]
+(qvd)
+
+Where NOT wildmatch("Task Name",'*Manually triggered *');
+
+[Task Duration]:
+LOAD
+    ExecutionId,
+    "Reload Duration",
+    "Reload Status" as [Reload Status Temp],
+    If(Wildmatch([Reload Status],'*FinishedSuccess*'),'Success',If(Wildmatch([Reload Status],'*FinishedFail*'),'Failed',[Reload Status])) as [Reload Status] 
+FROM [lib://APP_QlikSense_User_Extract/Task Monitoring New/Task Monitoring Prod/Reload_Status_Duration.qvd]
+(qvd);
+
+
+
+[Task Hierarchy]:
+LOAD
+    "Task Hierarchy1",
+    "Task Hierarchy2",
+    "Task Hierarchy3",
+    "Task Hierarchy4",
+    "Task Hierarchy5",
+    "Task Hierarchy6",
+    "Task Hierarchy7",
+    "Task Hierarchy8",
+    "Task Hierarchy9",
+    "Task Hierarchy10",
+    "Task Hierarchy11",
+    "Task Hierarchy12",
+    "Task Hierarchy13",
+    "Task Hierarchy14",
+    "Task Hierarchy15",
+    "Task Hierarchy16",
+    "Task Hierarchy17",
+    "Task Hierarchy18",
+    "Task Hierarchy19",
+    "Task Hierarchy20",
+    "Task Hierarchy21",
+    ParentTaskName,
+    TaskPath,
+    TaskId,
+    ParentTaskId,
+    "Task Hierarchy",
+    TaskDepth
+FROM [lib://APP_QlikSense_User_Extract/Task Monitoring New/Task Monitoring Prod/TaskHierarchy.qvd]
+(qvd)
+;
+
+
+
+
+------------------------------------------------------------------------------------------------
