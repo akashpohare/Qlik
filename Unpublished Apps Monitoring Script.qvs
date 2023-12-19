@@ -1,0 +1,220 @@
+-----------------------------------------------------
+
+Section - Main:
+
+--------------------------------------------------------
+
+SET ThousandSep=',';
+SET DecimalSep='.';
+SET MoneyThousandSep=',';
+SET MoneyDecimalSep='.';
+SET MoneyFormat='$#,##0.00;-$#,##0.00';
+SET TimeFormat='h:mm:ss TT';
+SET DateFormat='YYYY-MM-DD';
+SET TimestampFormat='YYYY-MM-DD h:mm:ss[.fff] TT';
+SET FirstWeekDay=6;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='en-US';
+SET CreateSearchIndexOnReload=1;
+SET MonthNames='Jan;Feb;Mar;Apr;May;Jun;Jul;Aug;Sep;Oct;Nov;Dec';
+SET LongMonthNames='January;February;March;April;May;June;July;August;September;October;November;December';
+SET DayNames='Mon;Tue;Wed;Thu;Fri;Sat;Sun';
+SET LongDayNames='Monday;Tuesday;Wednesday;Thursday;Friday;Saturday;Sunday';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+Set NullValue = 'R136268@domain.com';
+
+// Set the date variables to comapre and restrict the data for last 2 months only
+
+Let vCurrentMonth = Month(Today());
+Trace 'Current month : $(vCurrentMonth)';
+
+Let vTwoMonthBack = '$(vCurrentMonth)'-2;
+Trace 'Two month Back : $(vTwoMonthBack)';
+
+// Set the base folder where QVD will be stored
+
+Set vBaseFolder = 'lib://Custom_User_Access_Details_ODBC/Unpublished Apps QVD';
+
+Let vYearMonth = Date(Floor(Date(ReloadTime())),'YYYYMM');
+Trace $(vYearMonth);
+
+
+/* Getting the environment based on host names so that data from multiple environment can be concatnated
+ and makes the application site independent and can be installed and executed on any Qlik
+Sense site */
+
+
+Let vHostName = ComputerName();
+Trace 'Server Name: $(vHostName)';
+
+IF(Wildmatch('$(vHostName)','NODE1W4260','NODE1W5466','NODE1W7861')) THEN
+        LET vEnvironment = 'IntDev';
+        Trace 'Qlik Sense Environment is $(vEnvironment)';
+
+  ELSEIF(Wildmatch('$(vHostName)','NODE1W4067','NODE1W5287','NODE1W7864','NODE1W7863','NODE1W4832')) THEN
+
+        LET vEnvironment = 'Test';
+        Trace 'Qlik Sense Environment is $(vEnvironment)';
+
+  ELSEIF(Wildmatch('$(vHostName)','NODE1W8621','NODE1W8306','NODE1W8307','NODE1W8377')) THEN
+
+        LET vEnvironment = 'Prod';
+        Trace 'Qlik Sense Environment is $(vEnvironment)';
+
+
+  ELSEIF(Wildmatch('$(vHostName)','NODE1W4130','NODE1W4128','NODE1W4129','NODE1W7862')) THEN
+
+        LET vEnvironment = 'DevConf';
+        Trace 'Qlik Sense Environment is $(vEnvironment)';
+
+
+ END IF
+ 
+-----------------------------------------------------------------------------
+------------------------------------------------------------------------------------
+
+Section - Load App Data:
+
+-------------------------------------------------------------------------------
+
+
+// Extracting the app details from QSR DB using REST API for one environment
+
+LIB CONNECT TO 'monitor_apps_REST_app';
+
+RestConnectorMasterTable:
+SQL SELECT 
+	"id" AS "id_u1",
+	"createdDate",
+	"modifiedDate",
+	"modifiedByUserName",
+	"name" AS "name_u1",
+	"appId",
+	"sourceAppId",
+	"targetAppId",
+	"publishTime",
+	"published",
+	"description",
+	"fileSize",
+	"lastReloadTime",
+	"thumbnail",
+	"savedInProductVersion",
+	"migrationHash",
+	"dynamicColor",
+	"availabilityStatus",
+	"lastDataDistribution",
+	"privileges" AS "privileges_u1",
+	"schemaPath",
+	"stream",
+	"__KEY_root",
+	(SELECT 
+		"@Value",
+		"__FK_customProperties"
+	FROM "customProperties" FK "__FK_customProperties" ArrayValueAlias "@Value"),
+	(SELECT 
+		"id",
+		"userId",
+		"userDirectory",
+		"userDirectoryConnectorName",
+		"name",
+		"privileges",
+		"__FK_owner"
+	FROM "owner" FK "__FK_owner"),
+	(SELECT 
+		"@Value" AS "@Value_u0",
+		"__FK_tags"
+	FROM "tags" FK "__FK_tags" ArrayValueAlias "@Value_u0"),
+	(SELECT 
+		"id" AS "id_u0",
+		"name" AS "name_u0",
+		"privileges" AS "privileges_u0",
+		"__FK_stream"
+	FROM "stream" FK "__FK_stream")
+FROM JSON (wrap on) "root" PK "__KEY_root";
+
+
+// Fetching only unpublished apps that have not been modified or reloaded since 2 months
+
+[App]:
+
+LOAD
+
+	Date([createdDate])            AS [Created Date],
+	Date([modifiedDate])           AS [Last Modified Date],
+	[name_u1]                      AS [App Name],
+	[published]                    AS [Published],
+	([fileSize]/1000)/1000         AS [File Size in MB],
+	Date([lastReloadTime])         AS [Reload Time],
+	
+	
+	[__KEY_root]
+RESIDENT RestConnectorMasterTable
+WHERE NOT IsNull([__KEY_root])  and [published]='False' and Date([lastReloadTime]) < Today()-60 
+and Date([modifiedDate]) < Today()-60;
+
+
+
+// Mapping app owners to their email address
+
+MapUserIDtoEmail:
+
+   Mapping Load 
+   Upper("userId")                   AS [Owner ID], 
+   Email 
+FROM [lib://Custom_User_Access_Details_ODBC/License Management/All Server Users Details/QVD/Prod/Country-Dept_Details.qvd]
+(qvd);
+
+
+// Adding some more details to the App table
+
+Left Join(App)
+
+LOAD	
+    '$(vEnvironment)'                 AS Environment,
+	Upper([userId])                   AS [Owner ID],
+	[userDirectory]                         ,
+	[name]                            AS [Owner Name],
+	IF( len(name)>0,ApplyMap('MapUserIDtoEmail', Upper("userId"), 'R136268@domain.com'),'R136268@domain.com' )   AS Email,
+	[__FK_owner] AS [__KEY_root]
+RESIDENT RestConnectorMasterTable
+WHERE NOT IsNull([__FK_owner]);
+
+STORE [App] INTO '$(vBaseFolder)/Unpublished_Apps_$(vEnvironment).qvd' (qvd);
+
+
+
+
+// Loading QVD's from all the environments and creating a single final table.
+
+All_Server_Unpublished_Apps:
+
+LOAD
+    
+    "Created Date",
+    "Last Modified Date",
+    "App Name",
+    Published,
+    "File Size in MB",
+    "Reload Time",
+    Environment,
+    "Owner ID",
+    userDirectory,
+    "Owner Name",
+    Email
+FROM [lib://Custom_User_Access_Details_ODBC/Unpublished Apps QVD/Unpublished_Apps_*.qvd]
+(qvd);
+
+
+
+
+
+DROP TABLE RestConnectorMasterTable;
+DROP TABLE App;
+
+Exit Script;
+
+
+--------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------
