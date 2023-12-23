@@ -1,0 +1,186 @@
+Section: Main
+
+------------------------------------------------------------------------------
+
+SET ThousandSep=',';
+SET DecimalSep='.';
+SET MoneyThousandSep=',';
+SET MoneyDecimalSep='.';
+SET MoneyFormat='$#,##0.00;-$#,##0.00';
+SET TimeFormat='h:mm:ss TT';
+SET DateFormat='YYYYMMDD';
+SET TimestampFormat='M/D/YYYY h:mm:ss[.fff] TT';
+SET FirstWeekDay=6;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='en-US';
+SET CreateSearchIndexOnReload=0;
+SET MonthNames='Jan;Feb;Mar;Apr;May;Jun;Jul;Aug;Sep;Oct;Nov;Dec';
+SET LongMonthNames='January;February;March;April;May;June;July;August;September;October;November;December';
+SET DayNames='Mon;Tue;Wed;Thu;Fri;Sat;Sun';
+SET LongDayNames='Monday;Tuesday;Wednesday;Thursday;Friday;Saturday;Sunday';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+
+
+// Set the required base variables
+
+LET vReloadTime = Date(Today());
+SET vFilePath = 'lib://DiskSpace/FileShare/File Size Monitoring/';
+
+
+TRACE 'App Reload time = $(vReloadTime)';
+TRACE 'Files Path = $(vFilePath)';
+
+--------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------
+
+
+Section: File Data
+
+----------------------------------------------------------------------------------------
+
+/*
+
+Create a mapping between Qlik Sense nodes and the environments. Also, define the folder to be 
+extracted from the source file based on the environment and define the disk space allocated
+
+*/
+
+FilesToLoad:
+
+LOAD * INLINE 
+[
+FileName,FolderPosition,FileServer,DiskSpaceinGB
+NODE1w8306_FileSizeMonitoring.csv,6,'Prod Internal',4095.98
+NODE1cdot804_QLIK_DEV_FileSizeMonitoring.csv,5,Dev Conf Old,3000
+NODE1cdot804_QLIK_TEST_FileSizeMonitoring.csv,5,Test Conf Old,5000
+NODE1w4067_FileSizeMonitoring.csv,7,Test Internal,1774.87
+NODE1w4260_FileSizeMonitoring.csv,7,Dev Internal,2389.87
+NODE1w6086_FileSizeMonitoring.csv,5,Prod Internal Old,3000
+NODE1w8308_FileSizeMonitoring.csv,6,Prod Conf,4095.98
+NODE1w8623_QLIK_DEV_FileSizeMonitoring.csv,5,Dev Conf,3276.98
+NODE1w8622_QLIK_TEST_H_FileSizeMonitoring.csv,5, Test Conf H,4571.98
+NODE1w8622_QLIK_TEST_G_FileSizeMonitoring.csv,5, Test Conf G,2559.98
+
+
+];
+
+
+// Create a dummy table to concatenate the results
+
+FileDetails:
+
+LOAD * INLINE 
+[
+FilePath,LastUpdateDate,"FileSize in MB",Folder,FileName,FileType,"Backup Files",FileServer
+
+];
+
+
+//Define how many files needs to be loaded and based on that set the variables using for loop
+
+LET vRecordNumber = NoOfRows('FilesToLoad');
+TRACE 'Number of Records = $(vRecordNumber)';
+
+
+FOR RecordNumber=1 TO NoOfRows('FilesToLoad')
+
+LET vFileToLoadName = PEEK('FileName',RecordNumber-1,'FilesToLoad');
+TRACE 'File Name to Load = $(vFileToLoadName)';
+
+LET vFolderPosition = PEEK('FolderPosition',RecordNumber-1,'FilesToLoad');
+TRACE 'Folder Position for the File to Load = $(vFolderPosition)';
+
+LET vFileServer = PEEK('FileServer',RecordNumber-1,'FilesToLoad');
+TRACE 'File Server = $(vFileServer)';
+
+LET vDiskSpaceinGB = PEEK('DiskSpaceinGB',RecordNumber-1,'FilesToLoad');
+
+
+CONCATENATE(FileDetails)
+
+LOAD
+    FullName                                             AS  FilePath,
+    Date(Floor(LastWriteTime))                           AS  LastUpdateDate,
+    Num((("Length"/1000)/1000) )                         AS  [FileSize in MB],
+    
+    SubField(FullName,'\',$(vFolderPosition))            AS  Folder,
+   
+    SubField(FullName,'\',-1)                            AS  FileName,
+    Upper(SubField(SubField(FullName,'\',-1),'.',-1))    AS  FileType,
+    If(WildMatch(Upper(FullName),'*BACKUP*','*ARCHIVE*','*DELETE*','*RITM*','*DELETE*','*BKP*','*BCK*','*DEPLOYMENT*','*RFC*'),'Backup','NA')  AS [Backup Files],
+   
+   
+    '$(vFileServer)' &'_'&Upper(SubField(FullName,'\',3))
+                                                         AS  FileServer,
+    '$(vDiskSpaceinGB)'                                  AS  DiskSpaceinGB                                       
+    
+FROM [lib://DiskSpace/FileShare/File Size Monitoring/$(vFileToLoadName)]
+(txt, utf8, embedded labels, delimiter is ',', msq);
+
+
+
+NEXT
+
+// Associating the folders with the project owners so that emails can be sent to respective owner
+
+Right Keep(FileDetails)
+
+LOAD
+    Folder,
+    "Contact Person",
+    "Contact E-Mail"
+FROM [lib://DiskSpace/FileShare/File Size Monitoring/Project_Folders_Owners_Mapping.xlsx]
+(ooxml, embedded labels, table is Owners);
+
+
+
+//Creating a master calendar
+
+MinMaxDate:
+
+Load
+    Min(LastUpdateDate)     AS  MinDate,
+    Max(LastUpdateDate)     AS  MaxDate
+    
+    Resident FileDetails;
+    
+Let vMindate = Peek('MinDate',0,'MinMaxDate');
+Let vMaxdate = Peek('MaxDate',0,'MinMaxDate');
+
+
+Trace 'vMindate: $(vMindate)';
+Trace 'vMaxdate: $(vMaxdate)';
+
+Drop Table MinMaxDate;
+
+TempMasterCalendar:
+
+LOAD
+    Date($(vMindate) + IterNo() - 1) as TempDate
+    AutoGenerate 1 While $(vMindate) + IterNo() -1 <= $(vMaxdate);
+    
+    
+MasterCalendar:
+
+Load
+    TempDate                         AS  LastUpdateDate,
+    Year(TempDate)                   AS  Year,
+    Month(TempDate)                  AS  Month,
+    Week(TempDate)                   AS  Week
+        
+Resident TempMasterCalendar Order By TempDate ASC;
+
+
+
+DROP TABLE TempMasterCalendar;
+DROP TABLE FilesToLoad;
+
+
+Exit Script;
+
+
+
+------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------
