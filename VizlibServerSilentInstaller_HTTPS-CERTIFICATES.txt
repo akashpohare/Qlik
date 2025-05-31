@@ -1,0 +1,17 @@
+@ECHO OFF 
+echo Starting Vizlib Server silent installation
+echo Installing... (this might take up to few minutes)
+:: PFX certificate example
+VizlibServerInstaller.exe /silent /norestart /log="example/install.log" /user=admin /userpwd=Password1! /dbpwd=Password1! /licenseloc="example/license" /pfxloc="example/example.pfx" /pfxpassphrase=""
+
+:: PEM certificate example, uncomment next line and modify. Also comment out PFX example above
+:: VizlibServerInstaller.exe /silent /norestart /log="example/install.log" /user=admin /userpwd=Password1! /dbpwd=Password1! /licenseloc="example/license" /pemrootloc="example/root.pem" /pemclientloc="example/client.pem" /pemkeyloc="example/client_key.pem"
+
+:: DB SSL parameters: /dbpemrootloc="example/server-ca.pem" /dbpemclientloc="example/client-cert.pem" /dbpemkeyloc="example/client-key.pem"
+
+if %errorlevel% == 0 (echo Installation Completed) else (echo Installation Failed. Error code %errorlevel% returned. Check installation logs for more details.)
+GOTO :DONE
+
+:FINISH_WITH_ERROR
+echo Installation was skipped. Provide proper attributes end try again.
+:DONE

@@ -1,0 +1,51 @@
+@ECHO OFF 
+echo Starting Vizlib Server silent installation
+:: parameters order. Required ones are marked with *
+:: 1 - location where log file will be created. Useful for troubleshooting*
+:: 2 - VMC user password*
+:: 3 - DB user password*
+:: 4 - license file location*
+:: 5 - VMC user name (if not provided, defaults to vmc_admin)
+:: 6 - exported config file location
+:: 7 - remote database server hostname
+:: 8 - remote database username
+:: 9 - database port
+:: 10 - remote database name
+:: 11 - remote databse server-ca pem file location
+:: 12 - remote databse client-cert pem file location
+:: 13 - remote databse client-key pem file location
+
+if "%~1" == "" GOTO :LOGFILE_Error
+if "%~2" == "" GOTO :VMCUSER_Error
+if "%~3" == "" GOTO :DBUSER_Error
+if "%~4" == "" (GOTO :LICENSE_ERROR) else  GOTO :INSTALL
+
+:LOGFILE_Error
+echo Log file location param was not specified. Path should be given where log file is meant to be created. Example value: "C:/install.log"
+GOTO :FINISH_WITH_ERROR
+
+:VMCUSER_Error
+echo Password for VMC user has to be specified.
+GOTO :FINISH_WITH_ERROR
+
+:DBUSER_Error
+echo Password for DB postgres user has to be specified.
+GOTO :FINISH_WITH_ERROR
+
+:LICENSE_ERROR
+echo Path to license file has to be specified
+GOTO :FINISH_WITH_ERROR
+
+:INSTALL
+echo Installing... (this might take up to few minutes)
+:: Batch parameter install example, comment out next line to run with predefined values, config file, pfx or pem certificates.
+VizlibServerInstaller.exe /silent /norestart /log=%1 /userpwd=%2 /dbpwd=%3 /licenseloc=%4 /user=%5 /cfgloc=%6 /dbhost=%7 /dbusr=%8 /dbport=%9 /dbname=%10 /dbpemrootloc=%11 /dbpemclientloc=%12 /dbpemkeyloc=%13
+
+:: Config file example, uncomment next line and modify. Also comment out Batch parameter example above and param error handling
+:: VizlibServerInstaller.exe /silent /norestart /log="example/install.log" /user=admin /userpwd=Password1! /dbpwd=Password1! /licenseloc="example/license" /cfgloc="example/example.json" /dbhost="example.com" /dbusr=sa /dbport=5432 /dbname="example_database" /dbpemrootloc="example/server-ca.pem" /dbpemclientloc="example/client-cert.pem" /dbpemkeyloc="example/client-key.pem"
+if %errorlevel% == 0 (echo Installation Completed) else (echo Installation Failed. Error code %errorlevel% returned. Check installation logs for more details.)
+GOTO :DONE
+
+:FINISH_WITH_ERROR
+echo Installation was skipped. Provide proper attributes and try again.
+:DONE
